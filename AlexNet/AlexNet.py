@@ -25,9 +25,8 @@ def fit_generator(feature, label, batch_size, image_augment):
             if len(batch) == batch_size:
                 batch_feature, batch_label = (
                     np.array([zoom(image, zoom=(8, 8, 1)) / 255 for image in feature[batch]]), label[batch])
-                if image_augment is not None:
-                    batch_feature, batch_label = (
-                        next(image_augment.flow(np.array(batch_feature), batch_label, batch_size=batch_size)))
+                batch_feature, batch_label = (
+                    next(image_augment.flow(np.array(batch_feature), batch_label, batch_size=batch_size)))
 
                 yield batch_feature, batch_label
 
@@ -143,8 +142,8 @@ class AlexNet(object):
             steps_per_epoch=self.__train_feature.shape[0] // 256,
             epochs=2,
             verbose=1,
-            validation_data=fit_generator(self.__valid_feature, self.__valid_label, 256, None),
-            validation_steps=self.__valid_feature.shape[0] // 256
+            validation_data=predict_generator(self.__valid_feature, self.__valid_label),
+            validation_steps=self.__valid_feature.shape[0]
         )
 
         self.__test_index["label"] = np.argmax(
