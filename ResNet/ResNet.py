@@ -9,7 +9,7 @@ from keras.models import Model
 from keras.utils import Sequence
 from keras.optimizers import Adam
 from keras.initializers import he_normal
-from keras.callbacks import EarlyStopping
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.preprocessing.image import ImageDataGenerator
 from keras.layers import Input, ZeroPadding2D, Conv2D, BatchNormalization, Activation, Add
 from keras.layers import GlobalAveragePooling2D, Dense
@@ -177,11 +177,14 @@ class ResNet(object):
             self.__res_net.fit_generator(
                 generator=FitGenerator(trn_x, trn_y, 256, self.__image_data_generator),
                 steps_per_epoch=trn_x.shape[0] // 256,
-                epochs=15,
+                epochs=60,
                 verbose=1,
                 callbacks=[
+                    ReduceLROnPlateau(
+                        patience=3
+                    ),
                     EarlyStopping(
-                        patience=5,
+                        patience=6,
                         restore_best_weights=True
                     )
                 ],
