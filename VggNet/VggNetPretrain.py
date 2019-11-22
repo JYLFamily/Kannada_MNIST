@@ -14,7 +14,6 @@ from keras.preprocessing.image import ImageDataGenerator
 np.random.seed(7)
 pd.set_option("max_rows", None)
 pd.set_option("max_columns", None)
-from keras.applications import ResNet50
 
 
 class FitGenerator(Sequence):
