@@ -6,6 +6,7 @@ import numpy as np
 from keras.datasets import mnist
 from keras.utils import to_categorical
 np.random.seed(7)
+torch.manual_seed(7)
 
 inputs_units = 784
 hidden_units = 256
@@ -18,9 +19,9 @@ class MlpTorch(object):
         self.__output_weight = torch.randn(output_units, hidden_units, requires_grad=True)
 
     def forward(self, images_x):
-        hidden_z = torch.mm(self.__hidden_weight, images_x)
+        hidden_z = self.__hidden_weight @ images_x
         hidden_a = torch.sigmoid(hidden_z)
-        output_z = torch.mm(self.__output_weight, hidden_a)
+        output_z = self.__output_weight @ hidden_a
         output_a = torch.sigmoid(output_z)
 
         return hidden_z, hidden_a, output_z, output_a
@@ -38,11 +39,17 @@ class MlpTorch(object):
 
         loss.backward()
 
-        self.__output_weight.data -= 1e-2 * self.__output_weight.grad
-        self.__hidden_weight.data -= 1e-2 * self.__hidden_weight.grad
+        # self.__output_weight.data -= 1e-2 * self.__output_weight.grad
+        # self.__hidden_weight.data -= 1e-2 * self.__hidden_weight.grad
+        #
+        # self.__output_weight.grad.data.zero_()
+        # self.__hidden_weight.grad.data.zero_()
 
-        self.__output_weight.grad.zero_()
-        self.__hidden_weight.grad.zero_()
+        with torch.no_grad():
+            self.__output_weight -= 1e-2 * self.__output_weight.grad
+            self.__hidden_weight -= 1e-2 * self.__hidden_weight.grad
+            self.__output_weight.grad.zero_()
+            self.__hidden_weight.grad.zero_()
 
     def train(self, epochs):
         (images_x, labels_y), (_, _) = mnist.load_data()
