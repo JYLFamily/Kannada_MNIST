@@ -4,15 +4,16 @@ import os
 import gc
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import KFold
+from keras.layers import *
 from keras.models import Model
 from keras.utils import Sequence
 from keras.optimizers import Adam
+from matplotlib import pyplot as plt
 from keras.initializers import he_normal
-from keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from sklearn.model_selection import KFold
+from scikitplot.metrics import plot_confusion_matrix
 from keras.preprocessing.image import ImageDataGenerator
-from keras.layers import Input, ZeroPadding2D, Conv2D, BatchNormalization, Activation, Add
-from keras.layers import GlobalAveragePooling2D, Dense
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 np.random.seed(7)
 pd.set_option("max_rows", None)
 pd.set_option("max_columns", None)
@@ -48,7 +49,7 @@ def residual(input_tensor, filters, strides, flag):
     return Activation("relu")(Add()([x, input_tensor]))
 
 
-def residual_net():
+def residual_net(output="binary"):
     # input layer
     input_layer = Input(shape=(28, 28, 1))
     x = ZeroPadding2D(padding=1, data_format="channels_last")(input_layer)
@@ -73,8 +74,12 @@ def residual_net():
     x = residual(input_tensor=x, filters=256, strides=1, flag=False)
 
     # output layer
-    x = GlobalAveragePooling2D()(x)
-    output_layer = Dense(units=10, activation="softmax", kernel_initializer=he_normal(7))(x)
+    if output == "binary":
+        x = GlobalAveragePooling2D()(x)
+        output_layer = Dense(units=1, activation="sigmoid", kernel_initializer=he_normal(7))(x)
+    else:
+        x = GlobalAveragePooling2D()(x)
+        output_layer = Dense(units=10, activation="softmax", kernel_initializer=he_normal(7))(x)
 
     return Model(inputs=input_layer, outputs=output_layer)
 
@@ -128,6 +133,9 @@ class ResNet(object):
 
         self.__folds = None
         self.__sub_preds = None
+        self.__sub_mixed = None
+        self.__val_preds = None
+        self.__val_mixed = None
 
         self.__image_data_generator = None
         self.__res_net = None
@@ -160,8 +168,10 @@ class ResNet(object):
 
     def model_fit_predict(self):
         self.__folds = KFold(n_splits=5, shuffle=True, random_state=7)
-        self.__sub_preds = np.zeros(shape=(self.__test_feature.shape[0], 10))
+        self.__sub_preds = np.zeros(shape=(self.__test_feature.shape[0],  10))
+        self.__val_preds = np.zeros(shape=(self.__train_feature.shape[0], 10))
 
+        # 1. network
         for n_fold, (trn_idx, val_idx) in enumerate(self.__folds.split(
                     X=self.__train_feature, y=self.__train_label)):
             print("Fold: " + str(n_fold))
@@ -172,7 +182,7 @@ class ResNet(object):
             trn_y = np.copy(self.__train_label[trn_idx])
             val_y = np.copy(self.__train_label[val_idx])
 
-            self.__res_net = residual_net()
+            self.__res_net = residual_net(output="softmax")
             self.__res_net.compile(optimizer=Adam(), loss="sparse_categorical_crossentropy", metrics=["accuracy"])
             self.__res_net.fit_generator(
                 generator=FitGenerator(trn_x, trn_y, 256, self.__image_data_generator),
@@ -200,9 +210,83 @@ class ResNet(object):
                 workers=1,
                 use_multiprocessing=False) / self.__folds.n_splits
 
+            self.__val_preds[val_idx, :] = self.__res_net.predict_generator(
+                generator=PredictGenerator(val_x),
+                steps=val_x.shape[0],
+                workers=1,
+                use_multiprocessing=False)
+
+        # 2. network
+        tra_index = np.where(np.logical_or(
+            self.__train_label == 0,
+            self.__train_label == 1
+        ))[0].tolist()
+        tes_index = np.where(np.logical_or(
+            np.argmax(self.__sub_preds, axis=1) == 0,
+            np.argmax(self.__sub_preds, axis=1) == 1
+        ))[0].tolist()
+
+        self.__folds = KFold(n_splits=5, shuffle=True, random_state=7)
+        self.__sub_mixed = np.zeros(shape=(self.__test_feature[tes_index].shape[0], ))
+        self.__val_mixed = np.zeros(shape=(self.__train_feature[tra_index].shape[0],))
+
+        for n_fold, (trn_idx, val_idx) in enumerate(self.__folds.split(
+                    X=self.__train_feature[tra_index], y=self.__train_label[tra_index])):
+            print("Fold: " + str(n_fold))
+            trn_x = np.copy(self.__train_feature[tra_index][trn_idx])
+            val_x = np.copy(self.__train_feature[tra_index][val_idx])
+            tes_x = np.copy(self.__test_feature[tes_index])
+
+            trn_y = np.copy(self.__train_label[tra_index][trn_idx])
+            val_y = np.copy(self.__train_label[tra_index][val_idx])
+
+            self.__res_net = residual_net(output="binary")
+            self.__res_net.compile(optimizer=Adam(), loss="binary_crossentropy", metrics=["accuracy"])
+            self.__res_net.fit_generator(
+                generator=FitGenerator(trn_x, trn_y, 256, self.__image_data_generator),
+                steps_per_epoch=trn_x.shape[0] // 256,
+                epochs=60,
+                verbose=1,
+                callbacks=[
+                    ReduceLROnPlateau(
+                        patience=3
+                    ),
+                    EarlyStopping(
+                        patience=6,
+                        restore_best_weights=True
+                    )
+                ],
+                validation_data=FitGenerator(val_x, val_y, 256, None),
+                validation_steps=val_x.shape[0] // 256,
+                workers=1,
+                use_multiprocessing=False
+            )
+
+            self.__sub_mixed += self.__res_net.predict_generator(
+                generator=PredictGenerator(tes_x),
+                steps=tes_x.shape[0],
+                workers=1,
+                use_multiprocessing=False).reshape(-1, ) / self.__folds.n_splits
+
+            self.__val_mixed[val_idx] = self.__res_net.predict_generator(
+                generator=PredictGenerator(val_x),
+                steps=val_x.shape[0],
+                workers=1,
+                use_multiprocessing=False).reshape(-1, )
+
+        self.__sub_preds = np.argmax(self.__sub_preds, axis=1)
+        self.__sub_preds[tes_index] = np.where(self.__sub_mixed > 0.5, 1, 0)
+
+        self.__val_preds = np.argmax(self.__val_preds, axis=1)
+        self.__val_preds[tra_index] = np.where(self.__val_mixed > 0.5, 1, 0)
+
     def data_write(self):
-        self.__test_index["label"] = np.argmax(self.__sub_preds, axis=1)
-        self.__test_index.to_csv(os.path.join(self.__path, "sample_submission.csv"), index=False)
+        self.__test_index["label"] = self.__sub_preds
+        self.__test_index.to_csv("submission.csv", index=False)
+
+    def plot_image(self):
+        plot_confusion_matrix(self.__train_label, self.__val_preds, normalize=True)
+        plt.show()
 
 
 if __name__ == "__main__":
